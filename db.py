@@ -5,7 +5,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
 
 def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    return sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
 
 
 def init_db():
@@ -75,12 +75,19 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
             func_id INTEGER NOT NULL,
+            center_id INTEGER NOT NULL,
             count INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(date, func_id),
-            FOREIGN KEY(func_id) REFERENCES functions(id)
+            UNIQUE(date, func_id, center_id),
+            FOREIGN KEY(func_id) REFERENCES functions(id),
+            FOREIGN KEY(center_id) REFERENCES centers(id)
         )
         """
     )
+    # Add center_id column if it doesn't exist (for existing databases)
+    try:
+        c.execute("ALTER TABLE daily_needs ADD COLUMN center_id INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     # Populate initial functions if empty
     c.execute("SELECT COUNT(*) FROM functions")
@@ -182,10 +189,21 @@ def add_function(name):
 def get_functions():
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, name FROM functions ORDER BY name")
+    c.execute("SELECT id, name FROM functions ORDER BY id")
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def remove_function(func_id):
+    conn = get_conn()
+    c = conn.cursor()
+    # remove employee_functions and daily_needs first
+    c.execute("DELETE FROM employee_functions WHERE func_id=?", (func_id,))
+    c.execute("DELETE FROM daily_needs WHERE func_id=?", (func_id,))
+    c.execute("DELETE FROM functions WHERE id=?", (func_id,))
+    conn.commit()
+    conn.close()
 
 
 def add_employee_function(emp_id, func_id, priority):
@@ -222,35 +240,53 @@ def remove_employee_function(emp_id, func_id):
     conn.close()
 
 
-def set_daily_need(date_str, func_id, count):
+def set_daily_need(date_str, func_id, count, center_id):
     conn = get_conn()
     c = conn.cursor()
     try:
-        c.execute("INSERT OR REPLACE INTO daily_needs(date, func_id, count) VALUES(?, ?, ?)", (date_str, func_id, count))
+        c.execute("INSERT OR REPLACE INTO daily_needs(date, func_id, count, center_id) VALUES(?, ?, ?, ?)", (date_str, func_id, count, center_id))
         conn.commit()
     except Exception:
         pass
     conn.close()
 
 
-def get_daily_needs(date_str=None):
+def get_daily_needs(date_str=None, center_id=None):
     conn = get_conn()
     c = conn.cursor()
     if date_str:
-        c.execute("""
-            SELECT f.name, dn.count
-            FROM daily_needs dn
-            JOIN functions f ON dn.func_id = f.id
-            WHERE dn.date = ?
-            ORDER BY f.name
-        """, (date_str,))
+        if center_id:
+            c.execute("""
+                SELECT f.name, dn.count
+                FROM daily_needs dn
+                JOIN functions f ON dn.func_id = f.id
+                WHERE dn.date = ? AND dn.center_id = ?
+                ORDER BY f.name
+            """, (date_str, center_id))
+        else:
+            c.execute("""
+                SELECT f.name, dn.count
+                FROM daily_needs dn
+                JOIN functions f ON dn.func_id = f.id
+                WHERE dn.date = ?
+                ORDER BY f.name
+            """, (date_str,))
     else:
-        c.execute("""
-            SELECT dn.date, f.name, dn.count
-            FROM daily_needs dn
-            JOIN functions f ON dn.func_id = f.id
-            ORDER BY dn.date, f.name
-        """)
+        if center_id:
+            c.execute("""
+                SELECT dn.date, f.name, dn.count
+                FROM daily_needs dn
+                JOIN functions f ON dn.func_id = f.id
+                WHERE dn.center_id = ?
+                ORDER BY dn.date, f.name
+            """, (center_id,))
+        else:
+            c.execute("""
+                SELECT dn.date, f.name, dn.count
+                FROM daily_needs dn
+                JOIN functions f ON dn.func_id = f.id
+                ORDER BY dn.date, f.name
+            """)
     rows = c.fetchall()
     conn.close()
     return rows
@@ -266,6 +302,7 @@ def remove_center(center_id):
         c.execute("DELETE FROM vacations WHERE emp_id=?", (eid,))
         c.execute("DELETE FROM employee_functions WHERE emp_id=?", (eid,))
     c.execute("DELETE FROM employees WHERE center_id=?", (center_id,))
+    c.execute("DELETE FROM daily_needs WHERE center_id=?", (center_id,))
     c.execute("DELETE FROM centers WHERE id=?", (center_id,))
     conn.commit()
     conn.close()
