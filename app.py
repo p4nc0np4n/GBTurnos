@@ -649,61 +649,36 @@ with tab2:
                     # Empleados asignados hoy
                     assigned_today = set()
 
-                    # Para cada función ordenada alfabéticamente
-                    for func_name in sorted(func_names):
+                    # Recopilar todas las posibles asignaciones
+                    all_candidates = []
+                    for func_name in func_names:
                         if func_name not in needs_dict or needs_dict[func_name] == 0:
                             continue
-                        need_count = needs_dict[func_name]
                         func_id = next(k for k, v in func_dict.items() if v == func_name)
-
-                        # Encontrar empleados disponibles con esta función
-                        candidates = []
                         for emp_id, funcs in emp_functions.items():
                             if func_name in funcs and emp_id not in assigned_today and date_str not in emp_vacations[emp_id]:
                                 priority = funcs[func_name]
                                 rem_h = remaining_hours[emp_id]
                                 if rem_h > 0:
-                                    candidates.append((emp_id, priority, rem_h))
+                                    all_candidates.append((priority, emp_id, func_id, func_name))
 
-                        # Ordenar por prioridad descendente
-                        candidates.sort(key=lambda x: x[1], reverse=True)
+                    # Ordenar por prioridad descendente
+                    all_candidates.sort(reverse=True, key=lambda x: x[0])
 
-                        # Asignar agrupando por prioridad
-                        assigned_count = 0
-                        current_priority = None
-                        priority_group = []
-                        for cand in candidates:
-                            if current_priority is None or cand[1] == current_priority:
-                                priority_group.append(cand)
-                                current_priority = cand[1]
-                            else:
-                                # Asignar del grupo anterior
-                                if priority_group and assigned_count < need_count:
-                                    weights = [c[2] for c in priority_group]
-                                    num_to_assign = min(need_count - assigned_count, len(priority_group))
-                                    selected = weighted_sample_without_replacement(priority_group, weights, num_to_assign)
-                                    for sel in selected:
-                                        emp_id = sel[0]
-                                        db.set_assignment(date_str, emp_id, func_id, sel_center_id)
-                                        assigned_today.add(emp_id)
-                                        assigned_count += 1
-                                priority_group = [cand]
-                                current_priority = cand[1]
+                    # Asignar de manera greedy
+                    assigned_per_func = {func_name: 0 for func_name in needs_dict}
+                    for priority, emp_id, func_id, func_name in all_candidates:
+                        if assigned_per_func[func_name] < needs_dict[func_name] and emp_id not in assigned_today and remaining_hours[emp_id] > 0:
+                            db.set_assignment(date_str, emp_id, func_id, sel_center_id)
+                            assigned_today.add(emp_id)
+                            assigned_per_func[func_name] += 1
+                            remaining_hours[emp_id] -= 1
 
-                        # Último grupo
-                        if priority_group and assigned_count < need_count:
-                            weights = [c[2] for c in priority_group]
-                            num_to_assign = min(need_count - assigned_count, len(priority_group))
-                            selected = weighted_sample_without_replacement(priority_group, weights, num_to_assign)
-                            for sel in selected:
-                                emp_id = sel[0]
-                                db.set_assignment(date_str, emp_id, func_id, sel_center_id)
-                                assigned_today.add(emp_id)
-                                assigned_count += 1
-
-                        # Si no se cubrió la necesidad, agregar alerta
-                        if assigned_count < need_count:
-                            alerts.append(f"Día {day:02d}: Función '{func_name}' necesita {need_count} personas, pero solo se asignaron {assigned_count}.")
+                    # Verificar si se cubrieron todas las necesidades
+                    for func_name, needed in needs_dict.items():
+                        assigned = assigned_per_func[func_name]
+                        if assigned < needed:
+                            alerts.append(f"Día {day:02d}: Función '{func_name}' necesita {needed} personas, pero solo se asignaron {assigned}.")
 
                 st.success("Calendario generado exitosamente.")
                 if alerts:

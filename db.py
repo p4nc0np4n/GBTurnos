@@ -85,6 +85,20 @@ def init_db():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_needs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            func_id INTEGER NOT NULL,
+            count INTEGER NOT NULL,
+            center_id INTEGER NOT NULL,
+            UNIQUE(date, func_id, center_id),
+            FOREIGN KEY(func_id) REFERENCES functions(id),
+            FOREIGN KEY(center_id) REFERENCES centers(id)
+        )
+        """
+    )
     # Add center_id column if it doesn't exist (for existing databases)
     try:
         c.execute("ALTER TABLE daily_needs ADD COLUMN center_id INTEGER NOT NULL DEFAULT 1")
