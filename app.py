@@ -183,27 +183,18 @@ year = st.session_state.get('selected_year', date.today().year)
 month = st.session_state.get('selected_month', date.today().month)
 
 # Definición de pestañas principales
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Calendario y Resumen", "Gestión de Funciones", "Necesidades Diarias", "Gestión de Empleados", "Generar Turnos"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Calendario y Resumen", "Gestión de Funciones", "Necesidades Diarias", "Gestión de Empleados", "Generar Turnos", "Calendario Anual y Resumen Anual"])
 
 with tab1:
-
-    # Lógica de cálculo de horas
-    cal = calendar.monthcalendar(year, month)
-    dias_laborables_mes = 0
-    for semana in cal:
-        for dia_idx in range(5): 
-            if semana[dia_idx] != 0:
-                dias_laborables_mes += 1
-
-    horas_teoricas = dias_laborables_mes * 8
-    st.metric(label=f"Horas Laborables Teóricas ({month}/{year})", value=f"{horas_teoricas} h")
 
     # Construir Tabla Resumen
     datos_resumen = []
     employees = db.get_employees(sel_center_id) if sel_center_id else []
+    holidays = db.get_holidays(sel_center_id) if sel_center_id else []
+    holiday_dates = {h[0]: h[1] for h in holidays}
 
     for emp in employees:
-        emp_id, emp_name = emp[0], emp[1]
+        emp_id, emp_name, max_horas, jornada = emp
         # Contar vacaciones
         vacas_totales = db.get_vacations(emp_id)
         vacas_mes = 0
@@ -212,7 +203,27 @@ with tab1:
             if v_date.year == year and v_date.month == month:
                 vacas_mes += 1
 
-        horas_realizadas = horas_teoricas - (vacas_mes * 8)
+        # Días laborables del mes (lunes a viernes)
+        dias_laborables_mes = 0
+        cal = calendar.monthcalendar(year, month)
+        for semana in cal:
+            for dia_idx in range(5): 
+                if semana[dia_idx] != 0:
+                    dias_laborables_mes += 1
+
+        # Restar festivos que caen en días laborables
+        dias_festivos_mes = 0
+        for h_date, _ in holidays:
+            h_year, h_month, h_day = map(int, h_date.split('-'))
+            if h_year == year and h_month == month:
+                h_weekday = date(h_year, h_month, h_day).weekday()
+                if h_weekday < 5:  # Lunes a viernes
+                    dias_festivos_mes += 1
+
+        dias_laborables_ajustados = dias_laborables_mes - dias_festivos_mes
+        horas_teoricas = dias_laborables_ajustados * jornada
+        dias_trabajados = dias_laborables_ajustados - vacas_mes
+        horas_realizadas = dias_trabajados * jornada
         balance = horas_realizadas - horas_teoricas
 
         datos_resumen.append({
@@ -231,13 +242,15 @@ with tab1:
 
     # Mostrar tabla con formato
     if 'Balance Mes' in df.columns:
-        # st.dataframe permite column_config en versiones nuevas, pero usaremos style.map para colores
         def color_balance(val):
             color = 'red' if val < 0 else 'green'
             return f'color: {color}'
         
-        # map sustituye a applymap en pandas recientes
-        styled = df.style.map(color_balance, subset=['Balance Mes'])
+        styled = df.style.format({
+            'Horas Teóricas': '{:.2f}',
+            'Horas Realizadas': '{:.2f}',
+            'Balance Mes': '{:.2f}'
+        }).map(color_balance, subset=['Balance Mes'])
         st.dataframe(styled, width='stretch')
     else:
         st.dataframe(df, width='stretch')
@@ -248,7 +261,7 @@ with tab1:
     num_days = calendar.monthrange(year, month)[1]
     
     for emp in employees:
-        emp_id, emp_name = emp[0], emp[1]
+        emp_id, emp_name, _, _ = emp
         fila = {"Empleado": emp_name}
         for d in range(1, num_days + 1):
             fecha_obj = date(year, month, d)
@@ -259,7 +272,9 @@ with tab1:
             vacs = db.get_vacations(emp_id)
             vac_dict = {v[0]: v[1] for v in vacs}
             
-            if fecha_actual in vac_dict:
+            if fecha_actual in holiday_dates:
+                estado = "Festivo"
+            elif fecha_actual in vac_dict:
                 estado = vac_dict[fecha_actual]
             elif dia_semana >= 5:
                 estado = "Libra"
@@ -281,6 +296,8 @@ with tab1:
                 return 'background-color: #e6f7ff'  # azul clarito
             if v == 'Libra':
                 return 'background-color: #f3f4f6'  # gris claro
+            if v == 'Festivo':
+                return 'background-color: #ffeaa7'  # amarillo claro
             if v in ['vacaciones', 'ausencia', 'IT']:
                 return 'background-color: #ffedd5'  # naranja claro
             return ''
@@ -473,6 +490,21 @@ with tab2:
             elif nuevo_emp:
                 db.add_employee(nuevo_emp, sel_center_id)
                 st.success(f"{nuevo_emp} añadido al centro.")
+                rerun()
+
+        # Parámetros de empleados
+        st.subheader("Parámetros de Empleados")
+        for emp in employees:
+            emp_id, emp_name, max_horas, jornada = emp
+            st.write(f"**{emp_name}**")
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                new_max_horas = st.number_input(f"Máx Horas Anuales para {emp_name}", value=float(max_horas), key=f"max_horas_{emp_id}")
+            with col_p2:
+                new_jornada = st.number_input(f"Horas Jornada Diaria para {emp_name}", value=float(jornada), key=f"jornada_{emp_id}")
+            if st.button(f"Actualizar {emp_name}", key=f"update_{emp_id}"):
+                db.update_employee_params(emp_id, new_max_horas, new_jornada)
+                st.success("Parámetros actualizados.")
                 rerun()
 
         st.divider()
@@ -732,3 +764,108 @@ with tab2:
                         df_shifts.at[func_name, f"{day:02d}"] = emp_name
 
             st.dataframe(df_shifts, width='stretch')
+
+# --- PESTAÑA 6: CALENDARIO ANUAL Y RESUMEN ANUAL ---
+with tab6:
+    st.header("Calendario Anual y Resumen Anual")
+
+    # Selector de año
+    selected_year = st.selectbox("Año", options=list(range(date.today().year - 2, date.today().year + 3)), index=2, key="annual_year")
+
+    if sel_center_id:
+        # Obtener empleados
+        employees = db.get_employees(sel_center_id)
+        holidays = db.get_holidays(sel_center_id)
+        holiday_dates = {h[0]: h[1] for h in holidays}
+
+        # Gestión de Festivos
+        st.subheader("Gestión de Festivos")
+        col_h1, col_h2 = st.columns(2)
+        with col_h1:
+            new_holiday_date = st.date_input("Fecha del Festivo", key="new_holiday_date")
+            new_holiday_name = st.text_input("Nombre del Festivo (opcional)", key="new_holiday_name")
+            if st.button("Añadir Festivo", key="add_holiday"):
+                db.add_holiday(new_holiday_date.strftime("%Y-%m-%d"), sel_center_id, new_holiday_name)
+                st.success("Festivo añadido.")
+                rerun()
+        with col_h2:
+            holiday_to_remove = st.selectbox("Festivo a eliminar", options=[f"{d} - {n or 'Sin nombre'}" for d, n in holidays], key="holiday_remove")
+            if st.button("Eliminar Festivo", key="remove_holiday") and holiday_to_remove:
+                date_str = holiday_to_remove.split(" - ")[0]
+                db.remove_holiday(date_str, sel_center_id)
+                st.success("Festivo eliminado.")
+                rerun()
+
+        # Calendario Anual
+        st.subheader(f"Calendario Anual {selected_year}")
+        # Crear un calendario anual simple
+        annual_cal = []
+        for month in range(1, 13):
+            month_name = calendar.month_name[month]
+            cal = calendar.monthcalendar(selected_year, month)
+            month_data = {"Mes": month_name}
+            for week in cal:
+                for day in week:
+                    if day != 0:
+                        date_str = f"{selected_year}-{month:02d}-{day:02d}"
+                        if date_str in holiday_dates:
+                            month_data[f"{day}"] = f"Festivo ({holiday_dates[date_str] or ''})"
+                        else:
+                            month_data[f"{day}"] = "Laborable"
+            annual_cal.append(month_data)
+
+        df_annual = pd.DataFrame(annual_cal)
+        st.dataframe(df_annual, width='stretch')
+
+        # Resumen Anual
+        st.subheader(f"Resumen Anual {selected_year}")
+        resumen_data = []
+        for emp in employees:
+            emp_id, emp_name, max_horas, jornada = emp
+            # Obtener vacaciones
+            vacs = db.get_vacations(emp_id)
+            dias_vacaciones = 0
+            dias_it = 0
+            dias_ausencia = 0
+            for v_date, v_type in vacs:
+                v_year = int(v_date.split('-')[0])
+                if v_year == selected_year:
+                    if v_type == 'vacaciones':
+                        dias_vacaciones += 1
+                    elif v_type == 'IT':
+                        dias_it += 1
+                    else:
+                        dias_ausencia += 1
+
+            # Días trabajados: total días laborables - festivos - ausencias
+            total_dias_laborables = 0
+            for month in range(1, 13):
+                cal = calendar.monthcalendar(selected_year, month)
+                for week in cal:
+                    for day in week:
+                        if day != 0:
+                            date_obj = date(selected_year, month, day)
+                            if date_obj.weekday() < 5:  # Lunes a viernes
+                                date_str = date_obj.strftime("%Y-%m-%d")
+                                if date_str not in holiday_dates:
+                                    total_dias_laborables += 1
+
+            dias_trabajados = total_dias_laborables - dias_vacaciones - dias_it - dias_ausencia
+            horas_trabajadas = dias_trabajados * jornada
+            balance_horas = horas_trabajadas - max_horas
+
+            resumen_data.append({
+                "Empleado": emp_name,
+                "Días Vacaciones": dias_vacaciones,
+                "Días IT": dias_it,
+                "Días Ausencia": dias_ausencia,
+                "Días Trabajados": dias_trabajados,
+                "Horas Trabajadas": horas_trabajadas,
+                "Máx Horas Anuales": max_horas,
+                "Balance Horas": balance_horas
+            })
+
+        df_resumen = pd.DataFrame(resumen_data)
+        st.dataframe(df_resumen, width='stretch')
+    else:
+        st.info("Selecciona un centro.")

@@ -26,6 +26,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             center_id INTEGER,
+            max_horas_anuales REAL DEFAULT 1600,
+            horas_jornada_diaria REAL DEFAULT 8,
             UNIQUE(name, center_id),
             FOREIGN KEY(center_id) REFERENCES centers(id)
         )
@@ -99,11 +101,32 @@ def init_db():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS holidays(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            center_id INTEGER NOT NULL,
+            name TEXT,
+            UNIQUE(date, center_id),
+            FOREIGN KEY(center_id) REFERENCES centers(id)
+        )
+        """
+    )
     # Add center_id column if it doesn't exist (for existing databases)
     try:
         c.execute("ALTER TABLE daily_needs ADD COLUMN center_id INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError:
         pass  # Column already exists
+    # Add new columns to employees
+    try:
+        c.execute("ALTER TABLE employees ADD COLUMN max_horas_anuales REAL DEFAULT 1800")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE employees ADD COLUMN horas_jornada_diaria REAL DEFAULT 8")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     # Populate initial functions if empty
     c.execute("SELECT COUNT(*) FROM functions")
@@ -139,9 +162,9 @@ def get_employees(center_id=None):
     conn = get_conn()
     c = conn.cursor()
     if center_id:
-        c.execute("SELECT id, name FROM employees WHERE center_id=? ORDER BY name", (center_id,))
+        c.execute("SELECT id, name, max_horas_anuales, horas_jornada_diaria FROM employees WHERE center_id=? ORDER BY name", (center_id,))
     else:
-        c.execute("SELECT id, name FROM employees ORDER BY name")
+        c.execute("SELECT id, name, max_horas_anuales, horas_jornada_diaria FROM employees ORDER BY name")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -152,7 +175,7 @@ def add_employee(name, center_id=None):
     c = conn.cursor()
     try:
         c.execute(
-            "INSERT INTO employees(name, center_id) VALUES(?, ?)", (name, center_id)
+            "INSERT INTO employees(name, center_id, max_horas_anuales, horas_jornada_diaria) VALUES(?, ?, 1600, 8)", (name, center_id)
         )
         conn.commit()
     except Exception:
@@ -407,6 +430,55 @@ def remove_center(center_id):
         c.execute("DELETE FROM employee_functions WHERE emp_id=?", (eid,))
     c.execute("DELETE FROM employees WHERE center_id=?", (center_id,))
     c.execute("DELETE FROM daily_needs WHERE center_id=?", (center_id,))
+    c.execute("DELETE FROM holidays WHERE center_id=?", (center_id,))
     c.execute("DELETE FROM centers WHERE id=?", (center_id,))
     conn.commit()
     conn.close()
+
+
+def add_holiday(date_str, center_id, name=None):
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO holidays(date, center_id, name) VALUES(?, ?, ?)", (date_str, center_id, name))
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+def remove_holiday(date_str, center_id):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM holidays WHERE date=? AND center_id=?", (date_str, center_id))
+    conn.commit()
+    conn.close()
+
+
+def get_holidays(center_id=None):
+    conn = get_conn()
+    c = conn.cursor()
+    if center_id:
+        c.execute("SELECT date, name FROM holidays WHERE center_id=? ORDER BY date", (center_id,))
+    else:
+        c.execute("SELECT date, name FROM holidays ORDER BY date")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def update_employee_params(emp_id, max_horas_anuales, horas_jornada_diaria):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE employees SET max_horas_anuales=?, horas_jornada_diaria=? WHERE id=?", (max_horas_anuales, horas_jornada_diaria, emp_id))
+    conn.commit()
+    conn.close()
+
+
+def get_employee_params(emp_id):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT max_horas_anuales, horas_jornada_diaria FROM employees WHERE id=?", (emp_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
