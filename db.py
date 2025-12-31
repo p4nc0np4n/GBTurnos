@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import calendar
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
@@ -71,13 +72,14 @@ def init_db():
     )
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS daily_needs(
+        CREATE TABLE IF NOT EXISTS assignments(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
+            emp_id INTEGER NOT NULL,
             func_id INTEGER NOT NULL,
             center_id INTEGER NOT NULL,
-            count INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(date, func_id, center_id),
+            UNIQUE(date, emp_id, center_id),
+            FOREIGN KEY(emp_id) REFERENCES employees(id),
             FOREIGN KEY(func_id) REFERENCES functions(id),
             FOREIGN KEY(center_id) REFERENCES centers(id)
         )
@@ -166,6 +168,14 @@ def add_vacation(emp_id, date_str, type_str='ausencia'):
     conn.close()
 
 
+def remove_vacation(emp_id, date_str):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM vacations WHERE emp_id=? AND date=?", (emp_id, date_str))
+    conn.commit()
+    conn.close()
+
+
 def get_vacations(emp_id):
     conn = get_conn()
     c = conn.cursor()
@@ -251,6 +261,20 @@ def set_daily_need(date_str, func_id, count, center_id):
     conn.close()
 
 
+def batch_set_daily_needs(needs_list):
+    """
+    needs_list: list of (date_str, func_id, count, center_id)
+    """
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.executemany("INSERT OR REPLACE INTO daily_needs(date, func_id, count, center_id) VALUES(?, ?, ?, ?)", needs_list)
+        conn.commit()
+    except Exception as e:
+        print(f"Error in batch_set_daily_needs: {e}")
+    conn.close()
+
+
 def get_daily_needs(date_str=None, center_id=None):
     conn = get_conn()
     c = conn.cursor()
@@ -290,6 +314,72 @@ def get_daily_needs(date_str=None, center_id=None):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def set_assignment(date_str, emp_id, func_id, center_id):
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT OR REPLACE INTO assignments(date, emp_id, func_id, center_id) VALUES(?, ?, ?, ?)", (date_str, emp_id, func_id, center_id))
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+def get_assignments(date_str=None, center_id=None):
+    conn = get_conn()
+    c = conn.cursor()
+    if date_str:
+        if center_id:
+            c.execute("""
+                SELECT a.date, e.name, f.name
+                FROM assignments a
+                JOIN employees e ON a.emp_id = e.id
+                JOIN functions f ON a.func_id = f.id
+                WHERE a.date = ? AND a.center_id = ?
+                ORDER BY f.name, e.name
+            """, (date_str, center_id))
+        else:
+            c.execute("""
+                SELECT a.date, e.name, f.name
+                FROM assignments a
+                JOIN employees e ON a.emp_id = e.id
+                JOIN functions f ON a.func_id = f.id
+                WHERE a.date = ?
+                ORDER BY f.name, e.name
+            """, (date_str,))
+    else:
+        if center_id:
+            c.execute("""
+                SELECT a.date, e.name, f.name
+                FROM assignments a
+                JOIN employees e ON a.emp_id = e.id
+                JOIN functions f ON a.func_id = f.id
+                WHERE a.center_id = ?
+                ORDER BY a.date, f.name, e.name
+            """, (center_id,))
+        else:
+            c.execute("""
+                SELECT a.date, e.name, f.name
+                FROM assignments a
+                JOIN employees e ON a.emp_id = e.id
+                JOIN functions f ON a.func_id = f.id
+                ORDER BY a.date, f.name, e.name
+            """)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def clear_assignments_for_month(year, month, center_id):
+    conn = get_conn()
+    c = conn.cursor()
+    start_date = f"{year}-{month:02d}-01"
+    end_date = f"{year}-{month:02d}-{calendar.monthrange(year, month)[1]}"
+    c.execute("DELETE FROM assignments WHERE date >= ? AND date <= ? AND center_id = ?", (start_date, end_date, center_id))
+    conn.commit()
+    conn.close()
 
 
 def remove_center(center_id):

@@ -3,6 +3,24 @@ import pandas as pd
 from datetime import date, timedelta
 import db
 import calendar
+import random
+
+def weighted_sample_without_replacement(items, weights, k):
+    """Selección ponderada sin reemplazo."""
+    if k >= len(items):
+        return items
+    selected = []
+    remaining_items = items[:]
+    remaining_weights = weights[:]
+    for _ in range(k):
+        if not remaining_items:
+            break
+        chosen = random.choices(remaining_items, weights=remaining_weights, k=1)[0]
+        selected.append(chosen)
+        idx = remaining_items.index(chosen)
+        remaining_items.pop(idx)
+        remaining_weights.pop(idx)
+    return selected
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Jornada", layout="wide")
@@ -55,6 +73,8 @@ if 'pending_function_delete' not in st.session_state:
     st.session_state.pending_function_delete = None
 if 'pending_function_confirm' not in st.session_state:
     st.session_state.pending_function_confirm = False
+if 'pending_clear' not in st.session_state:
+    st.session_state.pending_clear = False
 
 # Asegurar selección de centro
 centers = db.get_centers()
@@ -129,19 +149,41 @@ else:
     sel_center_id = None
 
 # Selector de Mes para visualizar
-col1, col2 = st.columns(2)
+st.subheader(f"Visualizando: {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}")
+col1, col2, col3 = st.columns([1,2,1])
 with col1:
-    current_year = date.today().year
-    years = list(range(current_year - 5, current_year + 6))
-    year = st.selectbox("Año", options=years, index=years.index(current_year))
+    if st.button("◀ Mes Anterior", key="prev_month"):
+        if st.session_state.get('selected_month', date.today().month) == 1:
+            st.session_state.selected_month = 12
+            st.session_state.selected_year = st.session_state.get('selected_year', date.today().year) - 1
+        else:
+            st.session_state.selected_month = st.session_state.get('selected_month', date.today().month) - 1
+        rerun()
 with col2:
+    # Selectores directos si quieren cambiar manualmente
+    years = list(range(st.session_state.get('selected_year', date.today().year) - 5, st.session_state.get('selected_year', date.today().year) + 6))
+    selected_year = st.selectbox("Año", options=years, index=years.index(st.session_state.get('selected_year', date.today().year)))
     month_names = list(calendar.month_name)[1:]
-    selected_month_name = st.selectbox("Mes", options=month_names, index=date.today().month - 1)
+    selected_month_name = st.selectbox("Mes", options=month_names, index=st.session_state.get('selected_month', date.today().month) - 1)
+    # Actualizar session state si cambian los selectboxes
+    if selected_year != st.session_state.get('selected_year', date.today().year) or month_names.index(selected_month_name) + 1 != st.session_state.get('selected_month', date.today().month):
+        st.session_state.selected_year = selected_year
+        st.session_state.selected_month = month_names.index(selected_month_name) + 1
+        rerun()
+with col3:
+    if st.button("Mes Siguiente ▶", key="next_month"):
+        if st.session_state.get('selected_month', date.today().month) == 12:
+            st.session_state.selected_month = 1
+            st.session_state.selected_year = st.session_state.get('selected_year', date.today().year) + 1
+        else:
+            st.session_state.selected_month = st.session_state.get('selected_month', date.today().month) + 1
+        rerun()
 
-month = month_names.index(selected_month_name) + 1
+year = st.session_state.get('selected_year', date.today().year)
+month = st.session_state.get('selected_month', date.today().month)
 
 # Definición de pestañas principales
-tab1, tab2, tab3 = st.tabs(["Calendario y Resumen", "Gestión de Funciones", "Gestión de Empleados"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Calendario y Resumen", "Gestión de Funciones", "Necesidades Diarias", "Gestión de Empleados", "Generar Turnos"])
 
 with tab1:
 
@@ -227,9 +269,12 @@ with tab1:
 
     df_cal = pd.DataFrame(matriz_visual)
     
+    # Convertir nombres de columnas a strings para evitar warnings
+    df_cal.columns = df_cal.columns.astype(str)
+    
     if not df_cal.empty:
         # Identificar columnas numéricas (días)
-        day_cols = [c for c in df_cal.columns if isinstance(c, int)]
+        day_cols = [c for c in df_cal.columns if c.isdigit()]
 
         def palette(v):
             if v == 'Trabaja':
@@ -253,7 +298,7 @@ with tab2:
     st.header("Gestión de Funciones y Asignaciones")
 
     # Subtabs
-    subtab1, subtab2, subtab3 = st.tabs(["Funciones", "Asignaciones", "Necesidades Diarias"])
+    subtab1, subtab2 = st.tabs(["Funciones", "Asignaciones"])
 
     with subtab1:
         st.subheader("Administrar Funciones")
@@ -325,7 +370,7 @@ with tab2:
             # Mostrar funciones actuales en tabla
             if current_funcs:
                 df_current = pd.DataFrame(current_funcs, columns=["Función", "Prioridad"])
-                st.dataframe(df_current, width='stretch')
+                st.dataframe(df_current, use_container_width=True)
             else:
                 st.info("No tiene funciones asignadas.")
 
@@ -359,14 +404,14 @@ with tab2:
         else:
             st.info("No hay empleados en este centro.")
 
-    with subtab3:
+    with tab3:
+        st.header("Necesidades Diarias")
+
         st.subheader("Establecer Necesidades Diarias")
-        col1, col2 = st.columns(2)
-        with col1:
-            year_need = st.selectbox("Año", options=years, index=years.index(current_year), key="year_need")
-        with col2:
-            month_need = st.selectbox("Mes", options=month_names, index=date.today().month - 1, key="month_need")
-            month_num = month_names.index(month_need) + 1
+        st.info(f"Editando necesidades para {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}")
+        
+        year_need = st.session_state.get('selected_year', date.today().year)
+        month_num = st.session_state.get('selected_month', date.today().month)
 
         functions = db.get_functions()
         func_names = [f[1] for f in functions]
@@ -393,21 +438,30 @@ with tab2:
             edited_df = st.data_editor(df_needs, key="needs_editor")
 
             if st.button("Guardar Necesidades", key="save_needs"):
-                # Asegurar que las columnas sean enteros
-                edited_df.columns = edited_df.columns.astype(int)
-                for func in func_names:
-                    # Encontrar ID
-                    func_id = next(f[0] for f in functions if f[1] == func)
-                    for day in days:
-                        count = edited_df.at[func, day]
-                        date_str = f"{year_need}-{month_num:02d}-{day:02d}"
-                        # Asumimos que set_daily_need maneja upsert (insertar o actualizar)
-                        db.set_daily_need(date_str, func_id, int(count), sel_center_id)
-                st.success("Guardado.")
+                with st.spinner("Guardando necesidades diarias..."):
+                    # Asegurar que las columnas sean enteros
+                    edited_df.columns = edited_df.columns.astype(int)
+                    changes = []
+                    for func in func_names:
+                        # Encontrar ID
+                        func_id = next(f[0] for f in functions if f[1] == func)
+                        for day in days:
+                            original_count = df_needs.at[func, day]
+                            new_count = edited_df.at[func, day]
+                            if original_count != new_count:
+                                date_str = f"{year_need}-{month_num:02d}-{day:02d}"
+                                changes.append((date_str, func_id, int(new_count), sel_center_id))
+                    if changes:
+                        db.batch_set_daily_needs(changes)
+                        st.success(f"Necesidades guardadas exitosamente. Se actualizaron {len(changes)} entradas.")
+                    else:
+                        st.info("No se detectaron cambios.")
+                # Actualizar df_needs para reflejar los cambios
+                df_needs = edited_df.copy()
         else:
             st.warning("No hay funciones definidas.")
 
-    with tab3:
+    with tab4:
         st.header("Gestión de Empleados")
 
         # Alta de Empleado
@@ -435,16 +489,62 @@ with tab2:
             emp_sel_name = None
             emp_sel_id = None
 
-        fecha_vac = st.date_input("Fecha de ausencia", date.today(), key="tab3_vac_date")
+        col1, col2 = st.columns(2)
+        with col1:
+            fecha_inicio = st.date_input("Fecha inicio", date.today(), key="tab3_vac_start")
+        with col2:
+            fecha_fin = st.date_input("Fecha fin", fecha_inicio, key="tab3_vac_end")
+        
         tipo_ausencia = st.selectbox("Tipo de ausencia", ["vacaciones", "ausencia", "IT"], key="tab3_tipo_ausencia")
         
         if st.button("Marcar Ausencia", key="tab3_mark_vac"):
             if not emp_sel_id:
                 st.warning("Selecciona un empleado.")
+            elif fecha_inicio > fecha_fin:
+                st.warning("La fecha de inicio no puede ser posterior a la fecha de fin.")
             else:
-                fecha_str = fecha_vac.strftime("%Y-%m-%d")
-                db.add_vacation(emp_sel_id, fecha_str, tipo_ausencia)
-                st.success("Guardado.")
+                current_date = fecha_inicio
+                added_count = 0
+                while current_date <= fecha_fin:
+                    fecha_str = current_date.strftime("%Y-%m-%d")
+                    db.add_vacation(emp_sel_id, fecha_str, tipo_ausencia)
+                    added_count += 1
+                    current_date += timedelta(days=1)
+                st.success(f"Ausencias guardadas: {added_count} días.")
+
+        st.divider()
+
+        # Quitar Ausencias
+        st.subheader("Quitar Ausencias")
+        if emp_names:
+            emp_sel_name_remove = st.selectbox("Empleado", emp_names, key="tab3_remove_emp_select")
+            emp_sel_id_remove = employees[emp_names.index(emp_sel_name_remove)][0]
+            
+            # Obtener ausencias del empleado
+            absences = db.get_vacations(emp_sel_id_remove)
+            if absences:
+                # Mostrar en una tabla
+                df_absences = pd.DataFrame(absences, columns=["Fecha", "Tipo"])
+                df_absences["Fecha"] = pd.to_datetime(df_absences["Fecha"]).dt.strftime("%d/%m/%Y")
+                st.dataframe(df_absences, width='stretch')
+                
+                # Selector para quitar
+                absence_options = [f"{row['Fecha']} - {row['Tipo']}" for _, row in df_absences.iterrows()]
+                selected_absence = st.selectbox("Ausencia a quitar", absence_options, key="tab3_remove_absence_select")
+                
+                if st.button("Quitar Ausencia", key="tab3_remove_vac"):
+                    # Extraer fecha de la opción seleccionada
+                    fecha_str = selected_absence.split(" - ")[0]
+                    # Convertir de dd/mm/yyyy a yyyy-mm-dd
+                    fecha_obj = pd.to_datetime(fecha_str, format="%d/%m/%Y")
+                    fecha_db = fecha_obj.strftime("%Y-%m-%d")
+                    db.remove_vacation(emp_sel_id_remove, fecha_db)
+                    st.success("Ausencia quitada.")
+                    rerun()
+            else:
+                st.info("No hay ausencias registradas para este empleado.")
+        else:
+            st.info("No hay empleados.")
 
         st.divider()
 
@@ -478,3 +578,182 @@ with tab2:
                         rerun()
         else:
             st.info("No hay empleados para eliminar en este centro.")
+
+    with tab5:
+        st.header("Generar Calendario de Turnos")
+
+        st.subheader(f"Generar turnos para {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}")
+
+        if not sel_center_id:
+            st.warning("Selecciona un centro primero.")
+        else:
+            # Obtener funciones para mostrar
+            functions = db.get_functions()
+            func_names = [f[1] for f in functions]
+
+            # Botón para generar
+            if st.button("Generar Calendario de Turnos", key="generate_shifts"):
+                # Lógica de generación
+                year = st.session_state.get('selected_year', date.today().year)
+                month = st.session_state.get('selected_month', date.today().month)
+                num_days = calendar.monthrange(year, month)[1]
+
+                # Limpiar asignaciones previas para el mes
+                db.clear_assignments_for_month(year, month, sel_center_id)
+
+                # Obtener empleados
+                employees = db.get_employees(sel_center_id)
+                emp_dict = {e[0]: e[1] for e in employees}
+
+                # Obtener funciones
+                functions = db.get_functions()
+                func_dict = {f[0]: f[1] for f in functions}
+                func_names = list(func_dict.values())
+
+                # Para cada empleado, obtener funciones y prioridades
+                emp_functions = {}
+                for emp_id in emp_dict:
+                    funcs = db.get_employee_functions(emp_id)
+                    emp_functions[emp_id] = {f[0]: f[1] for f in funcs}  # name: priority
+
+                # Obtener ausencias
+                emp_vacations = {}
+                for emp_id in emp_dict:
+                    vacs = db.get_vacations(emp_id)
+                    emp_vacations[emp_id] = {v[0]: v[1] for v in vacs}
+
+                # Calcular horas restantes para el mes
+                remaining_hours = {}
+                for emp_id in emp_dict:
+                    vacas_totales = db.get_vacations(emp_id)
+                    vacas_mes_count = sum(1 for v in vacas_totales if pd.to_datetime(v[0]).year == year and pd.to_datetime(v[0]).month == month)
+                    remaining_hours[emp_id] = (dias_laborables_mes - vacas_mes_count) * 8
+
+                # Lista para alertas
+                alerts = []
+
+                # Para cada día
+                for day in range(1, num_days + 1):
+                    date_str = f"{year}-{month:02d}-{day:02d}"
+                    fecha_obj = date(year, month, day)
+                    dia_semana = fecha_obj.weekday()  # 0=Lun, 6=Dom
+
+                    # Si es fin de semana, asumir no trabajar (puedes ajustar)
+                    if dia_semana >= 5:
+                        continue
+
+                    # Obtener necesidades
+                    needs = db.get_daily_needs(date_str, sel_center_id)
+                    needs_dict = {n[0]: n[1] for n in needs}
+
+                    # Empleados asignados hoy
+                    assigned_today = set()
+
+                    # Para cada función ordenada alfabéticamente
+                    for func_name in sorted(func_names):
+                        if func_name not in needs_dict or needs_dict[func_name] == 0:
+                            continue
+                        need_count = needs_dict[func_name]
+                        func_id = next(k for k, v in func_dict.items() if v == func_name)
+
+                        # Encontrar empleados disponibles con esta función
+                        candidates = []
+                        for emp_id, funcs in emp_functions.items():
+                            if func_name in funcs and emp_id not in assigned_today and date_str not in emp_vacations[emp_id]:
+                                priority = funcs[func_name]
+                                rem_h = remaining_hours[emp_id]
+                                if rem_h > 0:
+                                    candidates.append((emp_id, priority, rem_h))
+
+                        # Ordenar por prioridad descendente
+                        candidates.sort(key=lambda x: x[1], reverse=True)
+
+                        # Asignar agrupando por prioridad
+                        assigned_count = 0
+                        current_priority = None
+                        priority_group = []
+                        for cand in candidates:
+                            if current_priority is None or cand[1] == current_priority:
+                                priority_group.append(cand)
+                                current_priority = cand[1]
+                            else:
+                                # Asignar del grupo anterior
+                                if priority_group and assigned_count < need_count:
+                                    weights = [c[2] for c in priority_group]
+                                    num_to_assign = min(need_count - assigned_count, len(priority_group))
+                                    selected = weighted_sample_without_replacement(priority_group, weights, num_to_assign)
+                                    for sel in selected:
+                                        emp_id = sel[0]
+                                        db.set_assignment(date_str, emp_id, func_id, sel_center_id)
+                                        assigned_today.add(emp_id)
+                                        assigned_count += 1
+                                priority_group = [cand]
+                                current_priority = cand[1]
+
+                        # Último grupo
+                        if priority_group and assigned_count < need_count:
+                            weights = [c[2] for c in priority_group]
+                            num_to_assign = min(need_count - assigned_count, len(priority_group))
+                            selected = weighted_sample_without_replacement(priority_group, weights, num_to_assign)
+                            for sel in selected:
+                                emp_id = sel[0]
+                                db.set_assignment(date_str, emp_id, func_id, sel_center_id)
+                                assigned_today.add(emp_id)
+                                assigned_count += 1
+
+                        # Si no se cubrió la necesidad, agregar alerta
+                        if assigned_count < need_count:
+                            alerts.append(f"Día {day:02d}: Función '{func_name}' necesita {need_count} personas, pero solo se asignaron {assigned_count}.")
+
+                st.success("Calendario generado exitosamente.")
+                if alerts:
+                    st.warning("Alertas de cobertura insuficiente:")
+                    for alert in alerts:
+                        st.write(f"- {alert}")
+                else:
+                    st.info("Todas las necesidades han sido cubiertas.")
+
+            # Botón para borrar calendario
+            st.subheader("Borrar Calendario de Turnos")
+            if st.button("Borrar Calendario de Turnos", key="clear_shifts"):
+                st.session_state.pending_clear = True
+
+            if st.session_state.pending_clear:
+                st.warning(f"¿Borrar todas las asignaciones de turnos para {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}? Esta acción no se puede deshacer.")
+                col_clear1, col_clear2 = st.columns(2)
+                with col_clear1:
+                    if st.button("Confirmar Borrado", key="confirm_clear"):
+                        db.clear_assignments_for_month(st.session_state.get('selected_year', date.today().year), st.session_state.get('selected_month', date.today().month), sel_center_id)
+                        st.success("Calendario borrado.")
+                        st.session_state.pending_clear = False
+                        rerun()
+                with col_clear2:
+                    if st.button("Cancelar", key="cancel_clear"):
+                        st.session_state.pending_clear = False
+                        rerun()
+
+            # Mostrar calendario generado
+            st.subheader("Calendario de Turnos Generado")
+            year = st.session_state.get('selected_year', date.today().year)
+            month = st.session_state.get('selected_month', date.today().month)
+            num_days = calendar.monthrange(year, month)[1]
+
+            # Obtener asignaciones
+            assignments = db.get_assignments(center_id=sel_center_id)
+            # Filtrar para el mes
+            month_assignments = [a for a in assignments if a[0].startswith(f"{year}-{month:02d}")]
+
+            # Crear DataFrame
+            df_shifts = pd.DataFrame(index=func_names, columns=[f"{d:02d}" for d in range(1, num_days + 1)])
+            df_shifts = df_shifts.fillna("")  # Vacío
+
+            for date_str, emp_name, func_name in month_assignments:
+                day = int(date_str.split('-')[2])
+                if func_name in df_shifts.index:
+                    current = df_shifts.at[func_name, f"{day:02d}"]
+                    if current:
+                        df_shifts.at[func_name, f"{day:02d}"] = current + ", " + emp_name
+                    else:
+                        df_shifts.at[func_name, f"{day:02d}"] = emp_name
+
+            st.dataframe(df_shifts, width='stretch')
