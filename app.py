@@ -321,57 +321,60 @@ with tab2:
 
     with subtab1:
         st.subheader("Administrar Funciones")
-        functions = db.get_functions()
-        func_names = [f[1] for f in functions]
-
-        # Mostrar funciones en tabla
-        if functions:
-            df_functions = pd.DataFrame(functions, columns=["ID", "Nombre"])
-            df_functions = df_functions.drop(columns=["ID"])  # No mostrar ID
-            st.dataframe(df_functions, width='stretch')
+        if not sel_center_id:
+            st.warning("Selecciona un centro para gestionar sus funciones.")
         else:
-            st.info("No hay funciones definidas.")
+            functions = db.get_functions(sel_center_id)
+            func_names = [f[1] for f in functions]
 
-        new_func = st.text_input("Nueva Función", key="new_func")
-        if st.button("Añadir Función", key="add_func"):
-            if new_func and new_func not in func_names:
-                db.add_function(new_func)
-                st.success(f"Función '{new_func}' añadida.")
-                rerun()
+            # Mostrar funciones en tabla
+            if functions:
+                df_functions = pd.DataFrame(functions, columns=["ID", "Nombre"])
+                df_functions = df_functions.drop(columns=["ID"])  # No mostrar ID
+                st.dataframe(df_functions, width='stretch')
             else:
-                st.warning("Función ya existe o vacía.")
+                st.info("No hay funciones definidas.")
 
-        st.divider()
+            new_func = st.text_input("Nueva Función", key="new_func")
+            if st.button("Añadir Función", key="add_func"):
+                if new_func and new_func not in func_names:
+                    db.add_function(new_func, sel_center_id)
+                    st.success(f"Función '{new_func}' añadida.")
+                    rerun()
+                else:
+                    st.warning("Función ya existe o vacía.")
 
-        # Eliminar Función
-        if func_names:
-            del_func_name = st.selectbox("Función a eliminar", func_names, key="func_del_select")
-            
-            if st.button("Eliminar Función", key="del_func_btn"):
-                st.session_state.pending_function_delete = functions[func_names.index(del_func_name)][0]
-                st.session_state.pending_function_confirm = True
+            st.divider()
 
-            if st.session_state.get('pending_function_confirm') and st.session_state.get('pending_function_delete'):
-                # Buscar nombre seguro para mostrar
-                f_matches = [f[1] for f in functions if f[0] == st.session_state.pending_function_delete]
-                fname = f_matches[0] if f_matches else "Desconocida"
+            # Eliminar Función
+            if func_names:
+                del_func_name = st.selectbox("Función a eliminar", func_names, key="func_del_select")
                 
-                st.warning(f"¿Eliminar la función '{fname}'? Se borrarán asignaciones y necesidades asociadas.")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Confirmar eliminación función", key="confirm_del_func"):
-                        db.remove_function(st.session_state.pending_function_delete)
-                        st.success(f"Función '{fname}' eliminada.")
-                        st.session_state.pending_function_delete = None
-                        st.session_state.pending_function_confirm = False
-                        rerun()
-                with c2:
-                    if st.button("Cancelar", key="cancel_del_func"):
-                        st.session_state.pending_function_delete = None
-                        st.session_state.pending_function_confirm = False
-                        rerun()
-        else:
-            st.info("No hay funciones para eliminar.")
+                if st.button("Eliminar Función", key="del_func_btn"):
+                    st.session_state.pending_function_delete = functions[func_names.index(del_func_name)][0]
+                    st.session_state.pending_function_confirm = True
+
+                if st.session_state.get('pending_function_confirm') and st.session_state.get('pending_function_delete'):
+                    # Buscar nombre seguro para mostrar
+                    f_matches = [f[1] for f in functions if f[0] == st.session_state.pending_function_delete]
+                    fname = f_matches[0] if f_matches else "Desconocida"
+                    
+                    st.warning(f"¿Eliminar la función '{fname}'? Se borrarán asignaciones y necesidades asociadas.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Confirmar eliminación función", key="confirm_del_func"):
+                            db.remove_function(st.session_state.pending_function_delete)
+                            st.success(f"Función '{fname}' eliminada.")
+                            st.session_state.pending_function_delete = None
+                            st.session_state.pending_function_confirm = False
+                            rerun()
+                    with c2:
+                        if st.button("Cancelar", key="cancel_del_func"):
+                            st.session_state.pending_function_delete = None
+                            st.session_state.pending_function_confirm = False
+                            rerun()
+            else:
+                st.info("No hay funciones para eliminar.")
 
     with subtab2:
         st.subheader("Asignar Funciones a Empleados")
@@ -398,7 +401,7 @@ with tab2:
             emp_sel = st.selectbox("Seleccionar Empleado", emp_names, key="emp_func_select")
             emp_id = employees[emp_names.index(emp_sel)][0]
 
-            functions = db.get_functions()
+            functions = db.get_functions(sel_center_id)
             func_dict = {f[0]: f[1] for f in functions}
 
             current_funcs = db.get_employee_functions(emp_id)
@@ -448,53 +451,56 @@ with tab2:
         year_need = st.session_state.get('selected_year', date.today().year)
         month_num = st.session_state.get('selected_month', date.today().month)
 
-        functions = db.get_functions()
-        func_names = [f[1] for f in functions]
-
-        if func_names:
-            num_days = calendar.monthrange(year_need, month_num)[1]
-            days = list(range(1, num_days + 1))
-
-            # Obtener datos existentes
-            needs_data = {}
-            for day in days:
-                date_str = f"{year_need}-{month_num:02d}-{day:02d}"
-                needs = db.get_daily_needs(date_str, sel_center_id)
-                # Needs debe devolver [(func_name, count), ...]
-                needs_data[day] = {n[0]: n[1] for n in needs}
-
-            # Crear DataFrame editable
-            df_needs = pd.DataFrame(index=func_names, columns=days)
-            for func in func_names:
-                for day in days:
-                    df_needs.at[func, day] = needs_data[day].get(func, 0)
-
-            st.write("Editar necesidades (personas necesarias por función y día):")
-            edited_df = st.data_editor(df_needs, key="needs_editor")
-
-            if st.button("Guardar Necesidades", key="save_needs"):
-                with st.spinner("Guardando necesidades diarias..."):
-                    # Asegurar que las columnas sean enteros
-                    edited_df.columns = edited_df.columns.astype(int)
-                    changes = []
-                    for func in func_names:
-                        # Encontrar ID
-                        func_id = next(f[0] for f in functions if f[1] == func)
-                        for day in days:
-                            original_count = df_needs.at[func, day]
-                            new_count = edited_df.at[func, day]
-                            if original_count != new_count:
-                                date_str = f"{year_need}-{month_num:02d}-{day:02d}"
-                                changes.append((date_str, func_id, int(new_count), sel_center_id))
-                    if changes:
-                        db.batch_set_daily_needs(changes)
-                        st.success(f"Necesidades guardadas exitosamente. Se actualizaron {len(changes)} entradas.")
-                    else:
-                        st.info("No se detectaron cambios.")
-                # Actualizar df_needs para reflejar los cambios
-                df_needs = edited_df.copy()
+        if not sel_center_id:
+            st.warning("Selecciona un centro primero.")
         else:
-            st.warning("No hay funciones definidas.")
+            functions = db.get_functions(sel_center_id)
+            func_names = [f[1] for f in functions]
+
+            if func_names:
+                num_days = calendar.monthrange(year_need, month_num)[1]
+                days = list(range(1, num_days + 1))
+
+                # Obtener datos existentes
+                needs_data = {}
+                for day in days:
+                    date_str = f"{year_need}-{month_num:02d}-{day:02d}"
+                    needs = db.get_daily_needs(date_str, sel_center_id)
+                    # Needs debe devolver [(func_name, count), ...]
+                    needs_data[day] = {n[0]: n[1] for n in needs}
+
+                # Crear DataFrame editable
+                df_needs = pd.DataFrame(index=func_names, columns=days)
+                for func in func_names:
+                    for day in days:
+                        df_needs.at[func, day] = needs_data[day].get(func, 0)
+
+                st.write("Editar necesidades (personas necesarias por función y día):")
+                edited_df = st.data_editor(df_needs, key="needs_editor")
+
+                if st.button("Guardar Necesidades", key="save_needs"):
+                    with st.spinner("Guardando necesidades diarias..."):
+                        # Asegurar que las columnas sean enteros
+                        edited_df.columns = edited_df.columns.astype(int)
+                        changes = []
+                        for func in func_names:
+                            # Encontrar ID
+                            func_id = next(f[0] for f in functions if f[1] == func)
+                            for day in days:
+                                original_count = df_needs.at[func, day]
+                                new_count = edited_df.at[func, day]
+                                if original_count != new_count:
+                                    date_str = f"{year_need}-{month_num:02d}-{day:02d}"
+                                    changes.append((date_str, func_id, int(new_count), sel_center_id))
+                        if changes:
+                            db.batch_set_daily_needs(changes)
+                            st.success(f"Necesidades guardadas exitosamente. Se actualizaron {len(changes)} entradas.")
+                        else:
+                            st.info("No se detectaron cambios.")
+                    # Actualizar df_needs para reflejar los cambios
+                    df_needs = edited_df.copy()
+            else:
+                st.warning("No hay funciones definidas.")
 
     with tab4:
         st.header("Gestión de Empleados")
@@ -664,7 +670,7 @@ with tab2:
                         emp_dict = {e[0]: e[1] for e in employees}
                         emp_jornada = {e[0]: e[3] for e in employees}
                         
-                        functions = db.get_functions()
+                        functions = db.get_functions(sel_center_id)
                         func_dict = {f[0]: f[1] for f in functions}
                         
                         # Cargar habilidades (funciones) y prioridades por empleado
@@ -823,7 +829,7 @@ with tab2:
                     for a in st.session_state.get('shift_alerts', []):
                         st.warning(a)
                 # Construcción del DataFrame para visualización
-                functions_list = [f[1] for f in db.get_functions()]
+                functions_list = [f[1] for f in db.get_functions(sel_center_id)]
                 num_days_month = calendar.monthrange(year, month)[1]
                 day_columns = [f"{d:02d}" for d in range(1, num_days_month + 1)]
                 
