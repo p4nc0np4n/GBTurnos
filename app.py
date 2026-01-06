@@ -75,6 +75,8 @@ if 'pending_function_confirm' not in st.session_state:
     st.session_state.pending_function_confirm = False
 if 'pending_clear' not in st.session_state:
     st.session_state.pending_clear = False
+if 'shift_alerts' not in st.session_state:
+    st.session_state['shift_alerts'] = []
 
 # Asegurar selección de centro
 centers = db.get_centers()
@@ -376,6 +378,22 @@ with tab2:
         employees = db.get_employees(sel_center_id) if sel_center_id else []
         emp_names = [e[1] for e in employees]
         
+        # Resumen actual de asignaciones: Empleado y lista de funciones con prioridad
+        if employees:
+            summary_rows = []
+            for emp_id, emp_name, _, _ in employees:
+                funcs = db.get_employee_functions(emp_id)  # [(name, priority)] ordenado desc
+                if funcs:
+                    funcs_str = ", ".join([f"{name} ({prio})" for name, prio in funcs])
+                else:
+                    funcs_str = "—"
+                summary_rows.append({"Empleado": emp_name, "Funciones": funcs_str})
+
+            df_summary = pd.DataFrame(summary_rows)
+            st.dataframe(df_summary, use_container_width=True)
+        else:
+            st.info("No hay empleados en este centro.")
+
         if emp_names:
             emp_sel = st.selectbox("Seleccionar Empleado", emp_names, key="emp_func_select")
             emp_id = employees[emp_names.index(emp_sel)][0]
@@ -614,163 +632,219 @@ with tab2:
     with tab5:
         st.header("Generar Calendario de Turnos")
 
-        st.subheader(f"Generar turnos para {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}")
-
+        # 1. Parámetros de tiempo y centro
+        year = st.session_state.get('selected_year', date.today().year)
+        month = st.session_state.get('selected_month', date.today().month)
+        
+        st.subheader(f"Gestión de turnos para {calendar.month_name[month]} {year}")
+        
+        # Mostrar alertas de la última generación guardadas en session_state
+        if st.session_state.get('shift_alerts'):
+            n_alerts = len(st.session_state['shift_alerts'])
+            st.warning(f"⚠️ {n_alerts} alerta(s) en la última generación. Despliega para ver detalles.")
+            with st.expander("Detalles de alertas (última generación)", expanded=True):
+                for a in st.session_state.get('shift_alerts', []):
+                    st.warning(a)
+                if st.button("Borrar alertas", key="clear_shift_alerts"):
+                    st.session_state['shift_alerts'] = []
         if not sel_center_id:
             st.warning("Selecciona un centro primero.")
         else:
-            # Obtener funciones para mostrar
-            functions = db.get_functions()
-            func_names = [f[1] for f in functions]
+            # --- BOTONES DE ACCIÓN ---
+            col_actions = st.columns(2)
+            
+            with col_actions[0]:
+                if st.button("🚀 Generar Calendario de Turnos", key="generate_shifts"):
+                    with st.spinner("Calculando asignaciones óptimas..."):
+                        # Preparación inicial
+                        num_days = calendar.monthrange(year, month)[1]
+                        db.clear_assignments_for_month(year, month, sel_center_id)
 
-            # Botón para generar
-            if st.button("Generar Calendario de Turnos", key="generate_shifts"):
-                # Lógica de generación
-                year = st.session_state.get('selected_year', date.today().year)
-                month = st.session_state.get('selected_month', date.today().month)
-                num_days = calendar.monthrange(year, month)[1]
+                        employees = db.get_employees(sel_center_id)
+                        emp_dict = {e[0]: e[1] for e in employees}
+                        emp_jornada = {e[0]: e[3] for e in employees}
+                        
+                        functions = db.get_functions()
+                        func_dict = {f[0]: f[1] for f in functions}
+                        
+                        # Cargar habilidades (funciones) y prioridades por empleado
+                        emp_skills = {}
+                        for emp_id in emp_dict:
+                            funcs = db.get_employee_functions(emp_id)
+                            emp_skills[emp_id] = {f[0]: f[1] for f in funcs}
 
-                # Limpiar asignaciones previas para el mes
-                db.clear_assignments_for_month(year, month, sel_center_id)
+                        # Cargar ausencias/vacaciones
+                        emp_vacations = {}
+                        for emp_id in emp_dict:
+                            vacs = db.get_vacations(emp_id)
+                            emp_vacations[emp_id] = {v[0] for v in vacs}
 
-                # Obtener empleados
-                employees = db.get_employees(sel_center_id)
-                emp_dict = {e[0]: e[1] for e in employees}
+                        # Bolsa de horas mensual
+                        remaining_hours = {}
+                        for emp_id in emp_dict:
+                            vacas_mes_count = sum(1 for v_date in emp_vacations[emp_id] 
+                                                if v_date.startswith(f"{year}-{month:02d}"))
+                            remaining_hours[emp_id] = (num_days - vacas_mes_count) * emp_jornada[emp_id]
 
-                # Obtener funciones
-                functions = db.get_functions()
-                func_dict = {f[0]: f[1] for f in functions}
-                func_names = list(func_dict.values())
+                        alerts = []
 
-                # Para cada empleado, obtener funciones y prioridades
-                emp_functions = {}
-                for emp_id in emp_dict:
-                    funcs = db.get_employee_functions(emp_id)
-                    emp_functions[emp_id] = {f[0]: f[1] for f in funcs}  # name: priority
+                        # --- BUCLE DIARIO ---
+                        for day in range(1, num_days + 1):
+                            date_str = f"{year}-{month:02d}-{day:02d}"
+                            needs = db.get_daily_needs(date_str, sel_center_id)
+                            
+                            if not needs:
+                                continue
 
-                # Obtener ausencias
-                emp_vacations = {}
-                for emp_id in emp_dict:
-                    vacs = db.get_vacations(emp_id)
-                    emp_vacations[emp_id] = {v[0]: v[1] for v in vacs}
+                            # Traducir necesidades a lista de tareas
+                            tasks_to_fill = []
+                            for f_name, count in needs:
+                                f_id = next((k for k, v in func_dict.items() if v == f_name), None)
+                                if f_id:
+                                    for _ in range(count):
+                                        tasks_to_fill.append(f_id)
 
-                # Calcular horas restantes para el mes
-                remaining_hours = {}
-                for emp_id in emp_dict:
-                    vacas_totales = db.get_vacations(emp_id)
-                    vacas_mes_count = sum(1 for v in vacas_totales if pd.to_datetime(v[0]).year == year and pd.to_datetime(v[0]).month == month)
-                    remaining_hours[emp_id] = (dias_laborables_mes - vacas_mes_count) * 8
+                            assigned_today = set()
+                            
+                            # --- OPTIMIZACIÓN POR ESCASEZ CON DIAGNÓSTICO ---
+                            task_candidates_map = []
+                            for f_id in tasks_to_fill:
+                                f_name = func_dict[f_id]
+                                candidates = []
+                                
+                                # Contadores para el diagnóstico
+                                sin_habilidad = 0
+                                en_vacaciones = 0
+                                sin_horas = 0
 
-                # Lista para alertas
-                alerts = []
+                                for emp_id in emp_dict:
+                                    # 1. Habilidad
+                                    if f_name not in emp_skills[emp_id]:
+                                        sin_habilidad += 1
+                                        continue
+                                    # 2. Vacaciones
+                                    if date_str in emp_vacations[emp_id]:
+                                        en_vacaciones += 1
+                                        continue
+                                    # 3. Horas
+                                    if remaining_hours[emp_id] < emp_jornada[emp_id]:
+                                        sin_horas += 1
+                                        continue
+                                    
+                                    # Si pasa los filtros, es apto
+                                    if emp_id not in assigned_today:
+                                        candidates.append({
+                                            'emp_id': emp_id,
+                                            'priority': emp_skills[emp_id][f_name]
+                                        })
+                                
+                                # Si no hay candidatos para función, alertamos con el motivo
+                                if not candidates:
+                                    motivo = ""
+                                    if sin_habilidad == len(emp_dict): 
+                                        motivo = "Nadie tiene esta función asignada en su ficha."
+                                    elif (sin_habilidad + en_vacaciones + sin_horas) >= len(emp_dict):
+                                        motivo = f"Indisponibilidad: {en_vacaciones} en vacac./baja y {sin_horas} sin horas."
+                                    else:
+                                        motivo = "Personal cualificado ya ocupado en otras tareas hoy."
+                                    
+                                    alerts.append(f"Día {day:02d}: No se pudo cubrir '{f_name}'. {motivo}")
 
-                # Para cada día
-                for day in range(1, num_days + 1):
-                    date_str = f"{year}-{month:02d}-{day:02d}"
-                    fecha_obj = date(year, month, day)
-                    dia_semana = fecha_obj.weekday()  # 0=Lun, 6=Dom
+                                task_candidates_map.append({
+                                    'func_id': f_id,
+                                    'candidates': candidates,
+                                    'num_options': len(candidates)
+                                })
 
-                    # Si es fin de semana, asumir no trabajar (puedes ajustar)
-                    if dia_semana >= 5:
-                        continue
+                            # Ordenar: primero las tareas con menos opciones disponibles
+                            task_candidates_map.sort(key=lambda x: x['num_options'])
 
-                    # Obtener necesidades
-                    needs = db.get_daily_needs(date_str, sel_center_id)
-                    needs_dict = {n[0]: n[1] for n in needs}
+                            # Asignación final
+                            for item in task_candidates_map:
+                                f_id = item['func_id']
+                                available_now = [c for c in item['candidates'] if c['emp_id'] not in assigned_today]
+                                
+                                if available_now:
+                                    # Maximizar prioridad
+                                    available_now.sort(key=lambda x: x['priority'], reverse=True)
+                                    best_candidate = available_now[0]
+                                    emp_id = best_candidate['emp_id']
+                                    
+                                    db.set_assignment(date_str, emp_id, f_id, sel_center_id)
+                                    assigned_today.add(emp_id)
+                                    remaining_hours[emp_id] -= emp_jornada[emp_id]
+                                else:
+                                    # No quedó nadie disponible porque se usaron en tareas previas del día
+                                    func_name = func_dict.get(f_id, "Función")
+                                    alerts.append(f"Día {day:02d}: No se pudo cubrir '{func_name}'. Personal cualificado ya ocupado en otras tareas hoy.")
 
-                    # Empleados asignados hoy
-                    assigned_today = set()
+                        st.success("¡Calendario generado!")
+                        # Guardar alertas en session_state antes de reiniciar para que persistan
+                        if alerts:
+                            st.session_state['shift_alerts'] = alerts
+                        else:
+                            st.session_state['shift_alerts'] = []
+                        st.rerun()
 
-                    # Recopilar todas las posibles asignaciones
-                    all_candidates = []
-                    for func_name in func_names:
-                        if func_name not in needs_dict or needs_dict[func_name] == 0:
-                            continue
-                        func_id = next(k for k, v in func_dict.items() if v == func_name)
-                        for emp_id, funcs in emp_functions.items():
-                            if func_name in funcs and emp_id not in assigned_today and date_str not in emp_vacations[emp_id]:
-                                priority = funcs[func_name]
-                                rem_h = remaining_hours[emp_id]
-                                if rem_h > 0:
-                                    all_candidates.append((priority, emp_id, func_id, func_name))
+            with col_actions[1]:
+                if st.button("🗑️ Borrar Calendario del Mes", key="clear_shifts"):
+                    st.session_state.pending_clear = True
 
-                    # Ordenar por prioridad descendente
-                    all_candidates.sort(reverse=True, key=lambda x: x[0])
-
-                    # Asignar de manera greedy
-                    assigned_per_func = {func_name: 0 for func_name in needs_dict}
-                    for priority, emp_id, func_id, func_name in all_candidates:
-                        if assigned_per_func[func_name] < needs_dict[func_name] and emp_id not in assigned_today and remaining_hours[emp_id] > 0:
-                            db.set_assignment(date_str, emp_id, func_id, sel_center_id)
-                            assigned_today.add(emp_id)
-                            assigned_per_func[func_name] += 1
-                            remaining_hours[emp_id] -= 1
-
-                    # Verificar si se cubrieron todas las necesidades
-                    for func_name, needed in needs_dict.items():
-                        assigned = assigned_per_func[func_name]
-                        if assigned < needed:
-                            alerts.append(f"Día {day:02d}: Función '{func_name}' necesita {needed} personas, pero solo se asignaron {assigned}.")
-
-                st.success("Calendario generado exitosamente.")
-                if alerts:
-                    st.warning("Alertas de cobertura insuficiente:")
-                    for alert in alerts:
-                        st.write(f"- {alert}")
-                else:
-                    st.info("Todas las necesidades han sido cubiertas.")
-
-            # Botón para borrar calendario
-            st.subheader("Borrar Calendario de Turnos")
-            if st.button("Borrar Calendario de Turnos", key="clear_shifts"):
-                st.session_state.pending_clear = True
-
-            if st.session_state.pending_clear:
-                st.warning(f"¿Borrar todas las asignaciones de turnos para {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}? Esta acción no se puede deshacer.")
-                col_clear1, col_clear2 = st.columns(2)
-                with col_clear1:
-                    if st.button("Confirmar Borrado", key="confirm_clear"):
-                        db.clear_assignments_for_month(st.session_state.get('selected_year', date.today().year), st.session_state.get('selected_month', date.today().month), sel_center_id)
-                        st.success("Calendario borrado.")
+            # --- LÓGICA DE BORRADO ---
+            if st.session_state.get('pending_clear'):
+                st.warning("¿Estás seguro de borrar todos los turnos de este mes?")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Confirmar Borrado", key="confirm_clear_final"):
+                        db.clear_assignments_for_month(year, month, sel_center_id)
                         st.session_state.pending_clear = False
-                        rerun()
-                with col_clear2:
-                    if st.button("Cancelar", key="cancel_clear"):
+                        st.rerun()
+                with c2:
+                    if st.button("Cancelar", key="cancel_clear_final"):
                         st.session_state.pending_clear = False
-                        rerun()
+                        st.rerun()
 
-            # Mostrar calendario generado
-            st.subheader("Calendario de Turnos Generado")
-            year = st.session_state.get('selected_year', date.today().year)
-            month = st.session_state.get('selected_month', date.today().month)
-            num_days = calendar.monthrange(year, month)[1]
+            st.divider()
 
-            # Obtener asignaciones
-            assignments = db.get_assignments(center_id=sel_center_id)
-            # Filtrar para el mes
-            month_assignments = [a for a in assignments if a[0].startswith(f"{year}-{month:02d}")]
+            # --- VISUALIZACIÓN DE RESULTADOS ---
+            st.subheader("Resultados de la Planificación")
+            
+            # Obtener datos frescos de la BD
+            all_assignments = db.get_assignments(center_id=sel_center_id)
+            prefix = f"{year}-{month:02d}"
+            month_assignments = [a for a in all_assignments if a[0].startswith(prefix)]
 
-            # Crear DataFrame
-            df_shifts = pd.DataFrame(index=func_names, columns=[f"{d:02d}" for d in range(1, num_days + 1)])
-            df_shifts = df_shifts.fillna("")  # Vacío
+            if not month_assignments:
+                st.info(f"No hay turnos registrados para {calendar.month_name[month]} {year}.")
+            else:
+                # Mostrar alertas de cobertura justo antes del calendario de resultados
+                if st.session_state.get('shift_alerts'):
+                    st.subheader("Alertas de Cobertura")
+                    for a in st.session_state.get('shift_alerts', []):
+                        st.warning(a)
+                # Construcción del DataFrame para visualización
+                functions_list = [f[1] for f in db.get_functions()]
+                num_days_month = calendar.monthrange(year, month)[1]
+                day_columns = [f"{d:02d}" for d in range(1, num_days_month + 1)]
+                
+                df_view = pd.DataFrame(index=functions_list, columns=day_columns).fillna("")
 
-            for date_str, emp_name, func_name in month_assignments:
-                day = int(date_str.split('-')[2])
-                if func_name in df_shifts.index:
-                    current = df_shifts.at[func_name, f"{day:02d}"]
-                    if current:
-                        df_shifts.at[func_name, f"{day:02d}"] = current + ", " + emp_name
-                    else:
-                        df_shifts.at[func_name, f"{day:02d}"] = emp_name
+                for date_db, emp_name, func_name in month_assignments:
+                    d_str = date_db.split('-')[2]
+                    if func_name in df_view.index and d_str in df_view.columns:
+                        prev = df_view.at[func_name, d_str]
+                        df_view.at[func_name, d_str] = f"{prev}, {emp_name}".strip(", ")
 
-            st.dataframe(df_shifts, width='stretch')
+                st.dataframe(df_view, use_container_width=True)
+
+                
 
 # --- PESTAÑA 6: CALENDARIO ANUAL Y RESUMEN ANUAL ---
 with tab6:
     st.header("Calendario Anual y Resumen Anual")
 
     # Selector de año
-    selected_year = st.selectbox("Año", options=list(range(date.today().year - 2, date.today().year + 3)), index=2, key="annual_year")
+    selected_year = st.selectbox("Año", options=list(range(date.today().year - 1, date.today().year + 2)), index=2, key="annual_year")
 
     if sel_center_id:
         # Obtener empleados
