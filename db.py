@@ -12,9 +12,6 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    def ensure_default_center_id(cursor):
-        """Guarantee at least one center and return its id (used for migrations/seeding)."""
-                c.execute("INSERT OR IGNORE INTO functions(name, center_id) VALUES(?, ?)", (func, center_id))
     conn.commit()
     conn.close()
 
