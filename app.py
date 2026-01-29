@@ -11,7 +11,7 @@ from ui import sidebar, tabs
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Gestor de Jornada", layout="wide")
-st.title("🏢 GB Corporación - Control de Personal y Jornada")
+st.title("🏢 GB turnos - Control de Personal y Jornada")
 st.markdown(
     """
     <style>
