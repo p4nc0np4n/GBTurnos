@@ -34,24 +34,32 @@ def show_annual_calendar(selected_year, sel_center_id):
     """Muestra calendario anual con festivos."""
     holidays = db.get_holidays(sel_center_id)
     holiday_dates = {h[0]: h[1] for h in holidays}
-    
+
+    day_columns = [str(d) for d in range(1, 32)]
     annual_cal = []
     for month in range(1, 13):
         month_name = calendar.month_name[month]
-        cal = calendar.monthcalendar(selected_year, month)
         month_data = {"Mes": month_name}
-        for week in cal:
-            for day in week:
-                if day != 0:
-                    date_str = f"{selected_year}-{month:02d}-{day:02d}"
-                    if date_str in holiday_dates:
-                        month_data[f"{day}"] = f"Festivo ({holiday_dates[date_str] or ''})"
-                    else:
-                        month_data[f"{day}"] = "Laborable"
+        num_days_month = calendar.monthrange(selected_year, month)[1]
+        for day in range(1, num_days_month + 1):
+            date_str = f"{selected_year}-{month:02d}-{day:02d}"
+            if date_str in holiday_dates:
+                holiday_name = holiday_dates[date_str] or ""
+                suffix = f" ({holiday_name})" if holiday_name else ""
+                month_data[str(day)] = f"Festivo{suffix}"
+            else:
+                month_data[str(day)] = "Laborable"
         annual_cal.append(month_data)
 
-    df_annual = pd.DataFrame(annual_cal)
-    st.dataframe(df_annual, use_container_width=True)
+    df_annual = pd.DataFrame(annual_cal, columns=["Mes"] + day_columns).fillna("")
+
+    def _highlight_holidays(val):
+        if isinstance(val, str) and val.startswith("Festivo"):
+            return "background-color: #ffe08a; font-weight: 600;"
+        return ""
+
+    styled = df_annual.style.applymap(_highlight_holidays)
+    st.dataframe(styled, use_container_width=True)
 
 
 def show_annual_summary(selected_year, employees, sel_center_id):

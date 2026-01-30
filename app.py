@@ -45,7 +45,20 @@ if not centers:
 # --- 3. BARRA LATERAL (CONTROLES) ---
 with st.sidebar:
     st.header("Gestión")
-    sidebar.render_centers_management()
+    if st.button("🏢 Gestión de Centros", key="toggle_centers"):
+        st.session_state.show_centers = not st.session_state.get("show_centers", False)
+    if st.session_state.get("show_centers", False):
+        sidebar.render_centers_management()
+
+    st.divider()
+    section_options = [
+        "Calendario y resumen anual",
+        "Gestión de funciones",
+        "Necesidades diarias del centro",
+        "Gestión de empleados",
+        "Generar turnos del centro",
+    ]
+    selected_section = st.radio("Secciones", section_options, key="sidebar_section")
 
 
 # --- 4. PANEL PRINCIPAL (VISUALIZACIÓN) ---
@@ -60,7 +73,23 @@ else:
     sel_center_id = None
 
 # Selector de Mes para visualizar
-st.subheader(f"Visualizando: {calendar.month_name[st.session_state.get('selected_month', date.today().month)]} {st.session_state.get('selected_year', date.today().year)}")
+month_names_es = [
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+]
+current_month_idx = st.session_state.get('selected_month', date.today().month) - 1
+current_month_es = month_names_es[current_month_idx].capitalize()
+st.subheader(f"Visualizando: {current_month_es} {st.session_state.get('selected_year', date.today().year)}")
 col1, col2, col3 = st.columns([1,2,1])
 with col1:
     if st.button("◀ Mes Anterior", key="prev_month"):
@@ -73,11 +102,10 @@ with col1:
 with col2:
     years = list(range(st.session_state.get('selected_year', date.today().year) - 5, st.session_state.get('selected_year', date.today().year) + 6))
     selected_year = st.selectbox("Año", options=years, index=years.index(st.session_state.get('selected_year', date.today().year)))
-    month_names = list(calendar.month_name)[1:]
-    selected_month_name = st.selectbox("Mes", options=month_names, index=st.session_state.get('selected_month', date.today().month) - 1)
-    if selected_year != st.session_state.get('selected_year', date.today().year) or month_names.index(selected_month_name) + 1 != st.session_state.get('selected_month', date.today().month):
+    selected_month_name = st.selectbox("Mes", options=[m.capitalize() for m in month_names_es], index=st.session_state.get('selected_month', date.today().month) - 1)
+    if selected_year != st.session_state.get('selected_year', date.today().year) or month_names_es.index(selected_month_name.lower()) + 1 != st.session_state.get('selected_month', date.today().month):
         st.session_state.selected_year = selected_year
-        st.session_state.selected_month = month_names.index(selected_month_name) + 1
+        st.session_state.selected_month = month_names_es.index(selected_month_name.lower()) + 1
         st.rerun()
 with col3:
     if st.button("Mes Siguiente ▶", key="next_month"):
@@ -94,24 +122,35 @@ month = st.session_state.get('selected_month', date.today().month)
 # Obtener empleados para las pestañas
 employees = db.get_employees(sel_center_id) if sel_center_id else []
 
-# Definición de pestañas principales
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Calendario y Resumen", "Gestión de Funciones", "Necesidades Diarias", "Gestión de Empleados", "Generar Turnos", "Calendario Anual y Resumen Anual"])
+if selected_section == "Calendario y resumen anual":
+    subtab1, subtab2, subtab3 = st.tabs([
+        "Resumen mensual y calendario visual",
+        "Calendario anual y resumen anual del centro",
+        "Gestión de festivos",
+    ])
+    with subtab1:
+        tabs.render_tab1_summary_and_calendar(year, month, sel_center_id, employees)
+        st.divider()
+        tabs.render_annual_summary(year, employees, sel_center_id)
+    with subtab2:
+        selected_year_annual = st.selectbox(
+            "Año",
+            options=list(range(date.today().year - 1, date.today().year + 2)),
+            index=2,
+            key="annual_year",
+        )
+        tabs.render_annual_calendar(selected_year_annual, sel_center_id)
+    with subtab3:
+        tabs.render_holiday_management(sel_center_id)
 
-with tab1:
-    tabs.render_tab1_summary_and_calendar(year, month, sel_center_id, employees)
-
-with tab2:
+elif selected_section == "Gestión de funciones":
     tabs.render_tab2_functions(sel_center_id)
 
-with tab3:
+elif selected_section == "Necesidades diarias del centro":
     tabs.render_tab3_daily_needs(year, month, sel_center_id)
 
-with tab4:
+elif selected_section == "Gestión de empleados":
     tabs.render_tab4_employees(sel_center_id, employees)
 
-with tab5:
+elif selected_section == "Generar turnos del centro":
     tabs.render_tab5_shift_generation(year, month, sel_center_id)
-
-with tab6:
-    selected_year_annual = st.selectbox("Año", options=list(range(date.today().year - 1, date.today().year + 2)), index=2, key="annual_year")
-    tabs.render_tab6_annual_summary(selected_year_annual, sel_center_id, employees)
