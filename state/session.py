@@ -26,6 +26,8 @@ def init_session_state():
     if 'selected_year' not in st.session_state:
         from datetime import date
         st.session_state.selected_year = date.today().year
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
 
 
 def get_month_year():

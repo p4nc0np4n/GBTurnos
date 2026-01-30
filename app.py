@@ -3,6 +3,7 @@ Gestor de Jornada - GB Corporación
 Control de Personal, Turnos y Vacaciones
 """
 import streamlit as st
+import os
 from datetime import date
 import calendar
 import db
@@ -29,8 +30,30 @@ st.markdown(
 )
 
 # --- 2. INICIALIZACIÓN ---
-db.init_db()
 session.init_session_state()
+
+
+def require_password():
+    """Solicita contraseña antes de acceder a la app."""
+    if st.session_state.get("authenticated"):
+        return
+
+    st.subheader("Acceso")
+    password = st.text_input("Contraseña", type="password", key="password_input")
+    if st.button("Entrar", key="password_submit"):
+        expected = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD"))
+        if not expected:
+            st.error("No hay contraseña configurada.")
+        elif password == expected:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Contraseña incorrecta.")
+    st.stop()
+
+
+require_password()
+db.init_db()
 
 # Inicializar datos de ejemplo si no existen centros
 centers = db.get_centers()
