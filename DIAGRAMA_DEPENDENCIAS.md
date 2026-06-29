@@ -1,11 +1,12 @@
-"""
-DIAGRAMA DE DEPENDENCIAS DEL PROYECTO
-=====================================
+# DIAGRAMA DE DEPENDENCIAS DEL PROYECTO
 
 Muestra cómo se relacionan los módulos entre sí.
-"""
 
-DIAGRAMA = """
+---
+
+## Árbol de Módulos
+
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                         app.py (101 líneas)                     │
 │                      Orquestador Principal                      │
@@ -51,28 +52,30 @@ DIAGRAMA = """
                     │ utils.py     │
                     │ (18 L)       │
                     └──────────────┘
+```
 
+---
 
-FLUJO DE DATOS
-==============
+## Flujo de Datos
 
-1. app.py inicia y carga la configuración
-2. state/session.py inicializa el estado de Streamlit
-3. ui/sidebar.py renderiza la barra lateral
-4. ui/tabs.py renderiza las 6 pestañas principales
+1. `app.py` inicia y carga la configuración
+2. `state/session.py` inicializa el estado de Streamlit
+3. `ui/sidebar.py` renderiza la barra lateral
+4. `ui/tabs.py` renderiza las 6 pestañas principales
 5. Cada pestaña puede usar:
-   - components/tables.py para mostrar tablas
-   - components/calendar.py para mostrar calendarios
-   - logic/shift_generation.py para lógica compleja
-   - db.py para acceder a la base de datos
-6. logic/shift_generation.py usa:
-   - db.py para acceder a datos
-   - logic/utils.py para funciones auxiliares
+   - `components/tables.py` para mostrar tablas
+   - `components/calendar.py` para mostrar calendarios
+   - `logic/shift_generation.py` para lógica compleja
+   - `db.py` para acceder a la base de datos
+6. `logic/shift_generation.py` usa:
+   - `db.py` para acceder a datos
+   - `logic/utils.py` para funciones auxiliares
 
+---
 
-SEPARACIÓN DE RESPONSABILIDADES
-================================
+## Separación de Responsabilidades
 
+```text
 ┌──────────────────────────────────┐
 │  PRESENTACIÓN (ui/)              │
 │  - Renderización de interfaz     │
@@ -115,11 +118,13 @@ SEPARACIÓN DE RESPONSABILIDADES
 │  - Consultas                     │
 │  - Almacenamiento                │
 └──────────────────────────────────┘
+```
 
+---
 
-IMPORTACIONES CRUZADAS
-=====================
+## Importaciones Cruzadas
 
+```text
 app.py
   ├── import streamlit as st
   ├── from state import session
@@ -165,20 +170,19 @@ logic/utils.py
 
 seeder.py
   └── import db
+```
 
+---
 
-MÉTRICAS DE ACOPLAMIENTO
-========================
+## Métricas de Acoplamiento
 
-❌ Antes:  Altamente acoplado (todo en un archivo)
-✅ Después: Bajo acoplamiento (módulos independientes)
+- ❌ **Antes:** Altamente acoplado (todo en un archivo)
+- ✅ **Después:** Bajo acoplamiento (módulos independientes)
 
-Niveles de dependencia:
-- app.py: Depende de 3 módulos propios + streamlit + db
-- ui/: Depende de components, logic, db
-- components/: Depende de db
-- logic/: Depende de db
-- state/: Independiente (solo streamlit)
-"""
-
-print(DIAGRAMA)
+| Módulo       | Dependencias propias               |
+|--------------|------------------------------------|
+| `app.py`     | 3 módulos propios + streamlit + db |
+| `ui/`        | components, logic, db              |
+| `components/`| db                                 |
+| `logic/`     | db                                 |
+| `state/`     | Independiente (solo streamlit)     |
